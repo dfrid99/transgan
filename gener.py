@@ -1,54 +1,46 @@
 import torch
 import torch.nn as nn
-import math 
-
-class mlp(nn.Module):
-    def __init__(self, in_features, hidden_features, out_features, act = nn.ReLU()):
-        super(mlp, self).__init__()
-        self.net = nn.Sequential(
-                            nn.Linear(in_features, hidden_features),
-                            act,
-                            nn.Linear(hidden_features, out_features),
-                            act,
-                            )
-    def forward(self, x):
-        return self.net(x)
-        
-
+import math
+from Vit import Block, Mlp
 
 
 
 class Generator(nn.Module):
-    def __init__(self):
+    def __init__(self, initial_dim, initial_patch):
         super(Generator, self).__init__()
-        self.mlp = mlp(100, 384*12, 384*64)
-        encoder_layer1 = nn.TransformerEncoderLayer(d_model=384, nhead=8)
-        self.enc1 = nn.TransformerEncoder(encoder_layer1, num_layers=2)
+        self.initial_dim = initial_dim
+        self.initial_patch = initial_patch
+        self.mlp = Mlp(100, int(initial_dim*(initial_patch**2)/4), initial_dim*(initial_patch**2))
+        self.pos_encoding = nn.Parameter(torch.randn(1,initial_patch**2, initial_dim))
+        self.enc1 = nn.Sequential(*[Block(initial_dim,4, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0.1, attn_drop=0.1,
+                 drop_path=0.1, act_layer=nn.GELU, norm_layer=nn.LayerNorm) for i in range(2)])
         self.pix1 = nn.PixelShuffle(2)
-        encoder_layer2 = nn.TransformerEncoderLayer(d_model=96, nhead=8)
-        self.enc2 = nn.TransformerEncoder(encoder_layer2, num_layers=2)
+        self.enc2 = nn.Sequential(*[Block(int(initial_dim/4), 4, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0.1, attn_drop=0.1,
+                 drop_path=0.1, act_layer=nn.GELU, norm_layer=nn.LayerNorm) for i in range(2)])
         self.pix2 = nn.PixelShuffle(2)
-        encoder_layer3 = nn.TransformerEncoderLayer(d_model=24, nhead=8)
-        self.enc3 = nn.TransformerEncoder(encoder_layer3, num_layers=2)
-        self.fin_lin = nn.Linear(24, 3)
+        self.enc3 = nn.Sequential(*[Block(int(initial_dim/16), 4, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0.1, attn_drop=0.1,
+                 drop_path=0.1, act_layer=nn.GELU, norm_layer=nn.LayerNorm) for i in range(2)])
+        self.fin_lin = nn.Linear(int(initial_dim/16), 3)
         self.unflat = nn.Unflatten(1,(32,32))
     def forward(self, x):
+        bs = x.shape[0]
+        x = x.view(bs, -1)
         x = self.mlp(x)
-        x = x.view(-1, int(x.shape[1]/384),384)
+        x = x.view(bs,-1,self.initial_dim)
+        pos_vector = self.pos_encoding.repeat(bs, 1, 1)
+        x = x+ pos_vector
         x = self.enc1(x)
         dim = int(math.sqrt(x.shape[1]))
-        x = x.view(-1, x.shape[2], dim, dim)
+        x = x.view(bs, -1, dim, dim)
         x = self.pix1(x)
         x = x.view(x.shape[0],-1,x.shape[1])
         x = self.enc2(x)
         dim = int(math.sqrt(x.shape[1]))
-        x = x.view(-1, x.shape[2], dim, dim)
+        x = x.view(bs, -1, dim, dim)
         x = self.pix2(x)
-        x = x.view(x.shape[0],-1,x.shape[1])
+        x = x.view(bs,-1,x.shape[1])
         x = self.enc3(x)
         x = self.fin_lin(x)
         x = self.unflat(x)
         x = x.permute(0, 3, 1, 2)
         return x
-        
-
